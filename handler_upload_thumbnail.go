@@ -1,9 +1,8 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
-	"io"
+	"mime"
 	"net/http"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -45,24 +44,44 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	defer file.Close()
 
-	imageData, err := io.ReadAll(file)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Unable read the image data", err)
+		return
 	}
 
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Unable to parse get video from db", err)
+		return
 	}
 
 	if video.UserID != userID {
-		respondWithError(w, http.StatusUnauthorized, "Authenticated user is not the video owner,", err)
+		respondWithError(w, http.StatusUnauthorized, "Authenticated user is not the video owner", err)
+		return
 	}
 
-	base64Thumbnail := base64.StdEncoding.EncodeToString(imageData)
-	url := fmt.Sprintf("data:%v;base64,%v", headerType[0], base64Thumbnail)
+	mediatype, _, err := mime.ParseMediaType(headerType[0])
+	if mediatype != "image/jpeg" && mediatype != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "the thumbnail is not an image", err)
+	}
+
+	fileExtension := fileExtensionMaker(headerType[0])
+
+	dst, err := cfg.createFilePath(videoIDString, fileExtension)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "file to store thumbnail couldnt be created", err)
+	}
+
+	defer dst.Close()
+
+	err = copyFileToDst(dst, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error saving file", err)
+		return
+	}
+
+	url := cfg.makeURL(videoIDString, fileExtension)
 	video.ThumbnailURL = &url
-	fmt.Println(base64Thumbnail[:30])
 	cfg.db.UpdateVideo(video)
 
 	respondWithJSON(w, http.StatusOK, video)
