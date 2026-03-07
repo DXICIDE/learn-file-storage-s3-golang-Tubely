@@ -10,7 +10,7 @@ import (
 )
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
-	uploadLimit := http.MaxBytesReader(w, r.Body, 1<<30)
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<30)
 
 	videoIDString := r.PathValue("videoID")
 	videoID, err := uuid.Parse(videoIDString)
@@ -38,7 +38,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Unable to parse get video from db", err)
+		respondWithError(w, http.StatusNotFound, "Unable to parse get video from db", err)
 		return
 	}
 
@@ -50,7 +50,11 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	//parsing the uploaded video
 
 	const maxMemory = 10 << 20
-	r.ParseMultipartForm(maxMemory)
+	err = r.ParseMultipartForm(maxMemory)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
+		return
+	}
 
 	file, header, err := r.FormFile("video")
 	if err != nil {
@@ -59,12 +63,21 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	headerType := header.Header.Values("Content-Type")
+	if len(headerType) == 0 {
+		respondWithError(w, http.StatusBadRequest, "missing content type", nil)
+		return
+	}
 
 	defer file.Close()
 
 	mediatype, _, err := mime.ParseMediaType(headerType[0])
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
+		return
+	}
 	if mediatype != "video/mp4" {
-		respondWithError(w, http.StatusBadRequest, "the video is not an video", err)
+		respondWithError(w, http.StatusBadRequest, "the media is not an mp4 video", err)
+		return
 	}
 
 }
