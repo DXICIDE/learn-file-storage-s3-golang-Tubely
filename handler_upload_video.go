@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -127,4 +131,34 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	respondWithJSON(w, http.StatusOK, video)
 
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	type ffprobeOutput struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
+	}
+
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var buffer bytes.Buffer
+	cmd.Stdout = &buffer
+	cmd.Run()
+
+	var jsonStruct ffprobeOutput
+	err := json.Unmarshal(buffer.Bytes(), &jsonStruct)
+	if err != nil {
+		return "", err
+	}
+	if len(jsonStruct.Streams) > 0 && jsonStruct.Streams[0].Width*9 == jsonStruct.Streams[0].Height*16 {
+		return "16:9", nil
+	}
+	if len(jsonStruct.Streams) > 0 && jsonStruct.Streams[0].Height*9 == jsonStruct.Streams[0].Width*16 {
+		return "9:16", nil
+	}
+	if len(jsonStruct.Streams) < 1 {
+		return "", errors.New("no streams found in video")
+	}
+	return "other", nil
 }
