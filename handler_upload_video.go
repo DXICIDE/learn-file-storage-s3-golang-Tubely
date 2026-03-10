@@ -78,6 +78,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	defer file.Close()
 
+	//parses the media type
 	mediatype, _, err := mime.ParseMediaType(headerType[0])
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
@@ -88,39 +89,61 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	//creates temporary file for thatll substitute the original file
 	fileTmp, err := os.CreateTemp("", "tubely-upload.mp4")
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Failed to create tmp file", err)
 		return
 	}
 
+	//removing the file at the end
 	defer os.Remove(fileTmp.Name())
 	defer fileTmp.Close()
+
+	//copying file
 	_, err = io.Copy(fileTmp, file)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Failed to copy the file to tmp", err)
 		return
 	}
 
+	//resetting pointer
 	_, err = fileTmp.Seek(0, io.SeekStart)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Failed to reset the file pointer to start", err)
 		return
 	}
+
+	//making Input for s3 and randomizing file name for s3
 	var putObject s3.PutObjectInput
 	rnd := make([]byte, 32)
 	filled, err := rand.Read(rnd)
 	if filled != 32 || err != nil {
 		respondWithError(w, http.StatusInternalServerError, "couldnt create file dst", err)
+		return
 	}
-	fileTmp.Fd()
-	aspectRatio, err := getVideoAspectRatio(fileTmp.Name())
+
+	//moving the moov atom at the start
+	fileName, err := processVideoForFastStart(fileTmp.Name())
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Failed to put moov Atom at the start of file", err)
+		return
+	}
+	processedFile, err := os.Open(fileName)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Failed to open the new file", err)
+		return
+	}
+	defer os.Remove(processedFile.Name())
+	defer processedFile.Close()
+
+	//putting prefix infront of the file name based on aspect ratio for better clarity
+	aspectRatio, err := getVideoAspectRatio(processedFile.Name())
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Failed to reset the file pointer to start", err)
 		return
 	}
-	fileName := fmt.Sprintf("%x.mp4", rnd)
-
+	fileName = fmt.Sprintf("%x.mp4", rnd)
 	if aspectRatio == "16:9" {
 		fileName = fmt.Sprintf("landscape/%s", fileName)
 	} else if aspectRatio == "9:16" {
@@ -129,11 +152,13 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		fileName = fmt.Sprintf("other/%s", fileName)
 	}
 
+	//setting the s3 bucket input
 	putObject.Bucket = &cfg.s3Bucket
 	putObject.Key = &fileName
-	putObject.Body = fileTmp
+	putObject.Body = processedFile
 	putObject.ContentType = &mediatype
 
+	//putting the object in the bucket
 	_, err = cfg.s3Client.PutObject(r.Context(), &putObject)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Failed to put object in the bucket", err)
@@ -180,4 +205,15 @@ func getVideoAspectRatio(filePath string) (string, error) {
 		return "", errors.New("no streams found in video")
 	}
 	return "other", nil
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	newOutput := filePath + ".processing"
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", newOutput)
+
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("ffmpegz error: %v", err)
+	}
+	return newOutput, nil
 }
