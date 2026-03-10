@@ -113,7 +113,21 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	if filled != 32 || err != nil {
 		respondWithError(w, http.StatusInternalServerError, "couldnt create file dst", err)
 	}
+	fileTmp.Fd()
+	aspectRatio, err := getVideoAspectRatio(fileTmp.Name())
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Failed to reset the file pointer to start", err)
+		return
+	}
 	fileName := fmt.Sprintf("%x.mp4", rnd)
+
+	if aspectRatio == "16:9" {
+		fileName = fmt.Sprintf("landscape/%s", fileName)
+	} else if aspectRatio == "9:16" {
+		fileName = fmt.Sprintf("portrait/%s", fileName)
+	} else if aspectRatio == "other" {
+		fileName = fmt.Sprintf("other/%s", fileName)
+	}
 
 	putObject.Bucket = &cfg.s3Bucket
 	putObject.Key = &fileName
@@ -144,17 +158,22 @@ func getVideoAspectRatio(filePath string) (string, error) {
 	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
 	var buffer bytes.Buffer
 	cmd.Stdout = &buffer
-	cmd.Run()
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("ffprobe error: %v", err)
+	}
 
 	var jsonStruct ffprobeOutput
-	err := json.Unmarshal(buffer.Bytes(), &jsonStruct)
+	err = json.Unmarshal(buffer.Bytes(), &jsonStruct)
 	if err != nil {
 		return "", err
 	}
-	if len(jsonStruct.Streams) > 0 && jsonStruct.Streams[0].Width*9 == jsonStruct.Streams[0].Height*16 {
+	var ratio float32
+	ratio = float32(jsonStruct.Streams[0].Width) / float32(jsonStruct.Streams[0].Height)
+	if len(jsonStruct.Streams) > 0 && 1.75 < ratio && ratio < 1.8 {
 		return "16:9", nil
 	}
-	if len(jsonStruct.Streams) > 0 && jsonStruct.Streams[0].Height*9 == jsonStruct.Streams[0].Width*16 {
+	if len(jsonStruct.Streams) > 0 && 0.54 < ratio && ratio < 0.58 {
 		return "9:16", nil
 	}
 	if len(jsonStruct.Streams) < 1 {
