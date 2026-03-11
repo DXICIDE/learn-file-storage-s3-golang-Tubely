@@ -164,9 +164,19 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusBadRequest, "Failed to put object in the bucket", err)
 		return
 	}
-	videoUrl := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, fileName)
+	videoUrl := fmt.Sprintf("%s,%s", cfg.s3Bucket, fileName)
 	video.VideoURL = &videoUrl
-	cfg.db.UpdateVideo(video)
+	err = cfg.db.UpdateVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Failed to update db", err)
+		return
+	}
+
+	video, err = cfg.dbVideoToSignedVideo(video)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Failed to put create signed url", err)
+		return
+	}
 
 	respondWithJSON(w, http.StatusOK, video)
 
