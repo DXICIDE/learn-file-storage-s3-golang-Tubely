@@ -164,17 +164,11 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusBadRequest, "Failed to put object in the bucket", err)
 		return
 	}
-	videoUrl := fmt.Sprintf("%s,%s", cfg.s3Bucket, fileName)
+	videoUrl := fmt.Sprintf("%s%s", cfg.s3CfDistribution, fileName)
 	video.VideoURL = &videoUrl
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Failed to update db", err)
-		return
-	}
-
-	video, err = cfg.dbVideoToSignedVideo(video)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Failed to put create signed url", err)
 		return
 	}
 
